@@ -1,0 +1,68 @@
+require File.join(File.dirname(`node --print "require.resolve('expo/package.json')"`), "scripts/autolinking")
+require File.join(File.dirname(`node --print "require.resolve('react-native/package.json')"`), "scripts/react_native_pods")
+require File.join(File.dirname(`node --print "require.resolve('@react-native-community/cli-platform-ios/package.json')"`), "native_modules")
+
+require 'json'
+podfile_properties = JSON.parse(File.read(File.join(__dir__, 'Podfile.properties.json'))) rescue {}
+
+platform :ios, podfile_properties['ios.deploymentTarget'] || '12.0'
+install! 'cocoapods',
+  :deterministic_uuids => false
+
+target 'vpnapp' do
+  use_expo_modules!
+  config = use_native_modules!
+
+  use_frameworks! :linkage => podfile_properties['ios.useFrameworks'].to_sym if podfile_properties['ios.useFrameworks']
+
+  # Flags change depending on the env values.
+  flags = get_default_flags()
+
+  use_react_native!(
+    :path => config[:reactNativePath],
+    :hermes_enabled => flags[:hermes_enabled] || podfile_properties['expo.jsEngine'] == 'hermes',
+    :fabric_enabled => flags[:fabric_enabled],
+    # An absolute path to your application root.
+    :app_path => "#{Dir.pwd}/.."
+  )
+
+  # Uncomment to opt-in to using Flipper
+  # Note that if you have use_frameworks! enabled, Flipper will not work
+  #
+  # if !ENV['CI']
+  #   use_flipper!()
+  # end
+
+  use_flipper!({ 'Flipper' => '0.151.0' })
+  pod 'react-native-simple-openvpn', :path => '../node_modules/react-native-simple-openvpn'
+
+  post_install do |installer|
+  react_native_post_install(installer)
+  # Uncomment if using a M1 Mac with XCode 12.5
+  # __apply_Xcode_12_5_M1_post_install_workaround(installer)
+
+  # target -> https://www.rubydoc.info/gems/xcodeproj/Xcodeproj/Project/Object/PBXNativeTarget
+  installer.pods_project.targets.each do |target|
+    case target.name
+    # Ignore RCT-Folly because it only works with 9.0 as a deployment target
+    when 'RCT-Folly'
+      next
+    else
+      # Explicitly set pods deployment target for each build config to app deployment target
+      target.build_configurations.each do |config|
+        current_pod_target = config.build_settings['IPHONEOS_DEPLOYMENT_TARGET']
+        pod_ios_deployment_target = Gem::Version.new(current_pod_target)
+      end
+    end
+  end
+end
+
+  post_integrate do |installer|
+    begin
+      expo_patch_react_imports!(installer)
+    rescue => e
+      Pod::UI.warn e
+    end
+  end
+
+end
